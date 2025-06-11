@@ -1,0 +1,1 @@
+source .venv/bin/activate && python blur_faces.py media/friends.mp4 --mode allexcept --in-face-file media/Ross_Geller.jpg --censor-type pixelation
