@@ -63,11 +63,13 @@ def get_blurred_face(frame, censor_type, face_location):
 @click.option('--model', default='hog', type=click.Choice(['hog', 'cnn'], case_sensitive=False))
 @click.option('--censor-type', default='gaussianblur', type=click.Choice(['gaussianblur', 'facemasking', 'pixelation'], case_sensitive=False))
 @click.option('--count', default=1, help='How many times to upsample the image looking for faces. Higher numbers find smaller faces.')
-@click.option('--in-face-file', type=str)
+@click.option('--in-face-file', type=click.Path(exists=True), multiple=True)
 @click.argument('in-video-file', type=click.Path(exists=True))
 def blurfaces(mode, model, censor_type, count, in_face_file, in_video_file):
     click.echo(click.format_filename(in_video_file))
-    print(f'{mode=}, {model=}, {censor_type=}, {count=}, {in_face_file=}')
+    # Convert to list for consistent handling
+    in_face_files = list(in_face_file)
+    print(f'{mode=}, {model=}, {censor_type=}, {count=}, in_face_files={in_face_files}')
 
     _, file_extension = os.path.splitext(in_video_file)
 
@@ -84,7 +86,11 @@ def blurfaces(mode, model, censor_type, count, in_face_file, in_video_file):
 
         face_locations = []
         if mode == 'one':
-            face_to_blur_enc = get_face_encoding(in_face_file)
+            if not in_face_files:
+                exit('--in-face-file must be provided at least once when mode is "one".')
+
+            # get encodings for all provided reference faces
+            reference_encodings = [get_face_encoding(f) for f in in_face_files]
 
             for i in trange(length+1):
                 ret, frame = video_capture.read()
@@ -94,14 +100,19 @@ def blurfaces(mode, model, censor_type, count, in_face_file, in_video_file):
 
                 face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=count, model=model)
                 face_image_encodings = face_recognition.face_encodings(frame, face_locations)
-                results = face_recognition.compare_faces(face_image_encodings, face_to_blur_enc)
-                for found, face_location in zip(results, face_locations):
-                    if found:
+
+                # iterate over each face detected in the frame
+                for face_encoding, face_location in zip(face_image_encodings, face_locations):
+                    # check if this face matches ANY of the provided reference encodings
+                    matches = face_recognition.compare_faces(reference_encodings, face_encoding)
+                    if any(matches):
                         frame = get_blurred_face(frame, censor_type, face_location)
                 video_out.write(frame)
 
         elif mode == 'allexcept':
-            face_to_blur_enc = get_face_encoding(in_face_file)
+            if not in_face_files:
+                exit('--in-face-file must be provided at least once when mode is "allexcept".')
+            reference_encodings = [get_face_encoding(f) for f in in_face_files]
 
             for i in trange(length+1):
                 ret, frame = video_capture.read()
@@ -111,9 +122,11 @@ def blurfaces(mode, model, censor_type, count, in_face_file, in_video_file):
 
                 face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=count, model=model)
                 face_image_encodings = face_recognition.face_encodings(frame, face_locations)
-                results = face_recognition.compare_faces(face_image_encodings, face_to_blur_enc)
-                for found, face_location in zip(results, face_locations):
-                    if not found:
+
+                for face_encoding, face_location in zip(face_image_encodings, face_locations):
+                    matches = face_recognition.compare_faces(reference_encodings, face_encoding)
+                    # blur faces that DO NOT match any reference face
+                    if not any(matches):
                         frame = get_blurred_face(frame, censor_type, face_location)
                 video_out.write(frame)
         else:  # mode = all
