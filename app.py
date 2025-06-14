@@ -76,10 +76,32 @@ async def process_video(
         output_path = PROCESSED_DIR / f"{job_id}.mp4"
         temp_video_path = PROCESSED_DIR / f"{job_id}_temp.mp4"
         
-        # Create video writer
-        video_out = cv2.VideoWriter(
-            str(temp_video_path), int(fourcc), fps, (width, height)
-        )
+        # Create video writer with fallback codec support
+        # Try multiple codecs in order of preference
+        codecs_to_try = ["mp4v", "XVID", "MJPG", "X264"]
+        video_out = None
+        
+        for codec in codecs_to_try:
+            try:
+                test_fourcc = cv2.VideoWriter_fourcc(*codec)
+                video_out = cv2.VideoWriter(
+                    str(temp_video_path), test_fourcc, fps, (width, height)
+                )
+                # Test if the writer was created successfully
+                if video_out.isOpened():
+                    print(f"Successfully created VideoWriter with codec: {codec}")
+                    break
+                else:
+                    video_out.release()
+                    video_out = None
+            except Exception as e:
+                print(f"Failed to create VideoWriter with codec {codec}: {e}")
+                if video_out:
+                    video_out.release()
+                    video_out = None
+        
+        if video_out is None:
+            raise Exception("Could not create VideoWriter with any available codec")
         
         # Get reference encodings if needed
         reference_encodings = []
@@ -132,7 +154,7 @@ async def process_video(
         # Release resources
         video_capture.release()
         video_out.release()
-        cv2.destroyAllWindows()
+        # Removed cv2.destroyAllWindows() - no GUI windows to destroy
         
         # Add audio if present
         if has_audio(video_path):

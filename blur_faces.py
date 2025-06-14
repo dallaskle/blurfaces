@@ -81,10 +81,31 @@ def blurfaces(mode, model, censor_type, count, in_face_file, in_video_file):
     print(f'{width=}, {height=}, {length=}, {fps=}, {codec=}')
 
     with tempfile.NamedTemporaryFile(suffix=file_extension) as out_video_file:
-        # Use universal MP4 codec instead of original fourcc
-        universal_fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_out = cv2.VideoWriter(
-            out_video_file.name, universal_fourcc, fps, (width, height))
+        # Try multiple codecs with fallback support
+        codecs_to_try = ["mp4v", "XVID", "MJPG", "X264"]
+        video_out = None
+        
+        for codec in codecs_to_try:
+            try:
+                test_fourcc = cv2.VideoWriter_fourcc(*codec)
+                video_out = cv2.VideoWriter(
+                    out_video_file.name, test_fourcc, fps, (width, height)
+                )
+                # Test if the writer was created successfully
+                if video_out.isOpened():
+                    print(f"Successfully created VideoWriter with codec: {codec}")
+                    break
+                else:
+                    video_out.release()
+                    video_out = None
+            except Exception as e:
+                print(f"Failed to create VideoWriter with codec {codec}: {e}")
+                if video_out:
+                    video_out.release()
+                    video_out = None
+        
+        if video_out is None:
+            exit("Could not create VideoWriter with any available codec")
 
         face_locations = []
         if mode == 'one':
