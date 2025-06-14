@@ -81,8 +81,10 @@ def blurfaces(mode, model, censor_type, count, in_face_file, in_video_file):
     print(f'{width=}, {height=}, {length=}, {fps=}, {codec=}')
 
     with tempfile.NamedTemporaryFile(suffix=file_extension) as out_video_file:
+        # Use universal MP4 codec instead of original fourcc
+        universal_fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         video_out = cv2.VideoWriter(
-            out_video_file.name, int(fourcc), fps, (width, height))
+            out_video_file.name, universal_fourcc, fps, (width, height))
 
         face_locations = []
         if mode == 'one':
@@ -142,7 +144,7 @@ def blurfaces(mode, model, censor_type, count, in_face_file, in_video_file):
                 video_out.write(frame)
 
         video_capture.release()
-        cv2.destroyAllWindows()
+        # Removed cv2.destroyAllWindows() - no GUI windows to destroy
 
         blurred_video_input = ffmpeg.input(out_video_file.name)
         streams = [blurred_video_input, a1] if a1 else [blurred_video_input]
