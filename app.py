@@ -52,44 +52,88 @@ job_status = {}
 async def download_video_from_url(url: str, output_path: str) -> None:
     """Download video from URL to local file"""
     try:
-        async with aiohttp.ClientSession() as session:
+        print(f"[DEBUG] Starting download from URL: {url}")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3600)) as session:
             async with session.get(url) as response:
+                print(f"[DEBUG] Response status: {response.status}")
+                print(f"[DEBUG] Response headers: {dict(response.headers)}")
+                
                 if response.status != 200:
-                    raise HTTPException(400, f"Failed to download video: HTTP {response.status}")
+                    error_text = await response.text()
+                    raise HTTPException(400, f"Failed to download video from {url}. HTTP {response.status}. Server response: {error_text[:200]}...")
                 
                 # Check content length if available
                 content_length = response.headers.get('content-length')
                 if content_length:
+                    size_mb = int(content_length) // (1024*1024)
+                    print(f"[DEBUG] Video size: {size_mb}MB")
                     if int(content_length) > MAX_FILE_SIZE:
-                        raise HTTPException(413, f"Video file too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB")
+                        raise HTTPException(413, f"Video file too large ({size_mb}MB). Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB")
+                
+                # Check content type
+                content_type = response.headers.get('content-type', '')
+                print(f"[DEBUG] Content type: {content_type}")
+                if not any(video_type in content_type.lower() for video_type in ['video/', 'application/octet-stream', 'binary']):
+                    print(f"[WARNING] Unexpected content type: {content_type}")
                 
                 # Download and save file
+                print(f"[DEBUG] Starting file download to: {output_path}")
+                downloaded = 0
                 async with aiofiles.open(output_path, 'wb') as f:
                     async for chunk in response.content.iter_chunked(8192):
                         await f.write(chunk)
+                        downloaded += len(chunk)
+                        if downloaded % (1024*1024) == 0:  # Log every MB
+                            print(f"[DEBUG] Downloaded {downloaded // (1024*1024)}MB")
+                
+                print(f"[DEBUG] Download completed. Total size: {downloaded} bytes")
                         
     except aiohttp.ClientError as e:
-        raise HTTPException(400, f"Failed to download video: {str(e)}")
+        error_msg = f"Network error downloading video from {url}: {type(e).__name__}: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(400, error_msg)
+    except asyncio.TimeoutError as e:
+        error_msg = f"Timeout downloading video from {url}. The download took too long."
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(408, error_msg)
     except Exception as e:
-        raise HTTPException(500, f"Error downloading video: {str(e)}")
+        error_msg = f"Unexpected error downloading video from {url}: {type(e).__name__}: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(500, error_msg)
 
 async def download_image_from_url(url: str, output_path: str) -> None:
     """Download reference image from URL to local file"""
     try:
-        async with aiohttp.ClientSession() as session:
+        print(f"[DEBUG] Starting image download from URL: {url}")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
             async with session.get(url) as response:
+                print(f"[DEBUG] Image response status: {response.status}")
+                
                 if response.status != 200:
-                    raise HTTPException(400, f"Failed to download image: HTTP {response.status}")
+                    error_text = await response.text()
+                    raise HTTPException(400, f"Failed to download image from {url}. HTTP {response.status}. Server response: {error_text[:200]}...")
+                
+                # Check content type
+                content_type = response.headers.get('content-type', '')
+                print(f"[DEBUG] Image content type: {content_type}")
+                if not any(img_type in content_type.lower() for img_type in ['image/', 'application/octet-stream', 'binary']):
+                    print(f"[WARNING] Unexpected image content type: {content_type}")
                 
                 # Download and save file
                 async with aiofiles.open(output_path, 'wb') as f:
                     async for chunk in response.content.iter_chunked(8192):
                         await f.write(chunk)
+                
+                print(f"[DEBUG] Image download completed: {output_path}")
                         
     except aiohttp.ClientError as e:
-        raise HTTPException(400, f"Failed to download image: {str(e)}")
+        error_msg = f"Network error downloading image from {url}: {type(e).__name__}: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(400, error_msg)
     except Exception as e:
-        raise HTTPException(500, f"Error downloading image: {str(e)}")
+        error_msg = f"Unexpected error downloading image from {url}: {type(e).__name__}: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(500, error_msg)
 
 @app.get("/")
 async def root():
@@ -425,23 +469,42 @@ async def blur_all_faces_from_url(
 ):
     """Blur all faces in a video downloaded from URL"""
     
+    print(f"[DEBUG] Received URL request: video_url={video_url}, model={model}, censor_type={censor_type}")
+    
     # Validate inputs
+    if not video_url or not video_url.strip():
+        raise HTTPException(400, "Video URL is required and cannot be empty")
+    
+    if not video_url.startswith(('http://', 'https://')):
+        raise HTTPException(400, f"Invalid video URL format: '{video_url}'. URL must start with http:// or https://")
+    
     if model not in ["hog", "cnn"]:
-        raise HTTPException(400, "Model must be 'hog' or 'cnn'")
+        raise HTTPException(400, f"Invalid model '{model}'. Must be 'hog' (faster) or 'cnn' (more accurate)")
+    
     if censor_type not in ["gaussianblur", "facemasking", "pixelation"]:
-        raise HTTPException(400, "Invalid censor type")
+        raise HTTPException(400, f"Invalid censor type '{censor_type}'. Must be 'gaussianblur', 'facemasking', or 'pixelation'")
+    
+    if count < 1 or count > 10:
+        raise HTTPException(400, f"Invalid count '{count}'. Must be between 1 and 10")
     
     # Generate job ID
     job_id = str(uuid.uuid4())
+    print(f"[DEBUG] Generated job ID: {job_id}")
     
     # Download video from URL
     video_filename = f"{job_id}_video.mp4"
     video_path = UPLOAD_DIR / video_filename
     
     try:
+        print(f"[DEBUG] Starting video download for job {job_id}")
         await download_video_from_url(video_url, str(video_path))
+        print(f"[DEBUG] Video download completed for job {job_id}")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise e
+        error_msg = f"Failed to download video from URL: {type(e).__name__}: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(500, error_msg)
     
     # Start background processing
     background_tasks.add_task(
