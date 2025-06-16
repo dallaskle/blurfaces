@@ -43,12 +43,19 @@
             color: #666;
         }
         input[type="file"],
-        select {
+        input[type="url"],
+        select,
+        textarea {
             width: 100%;
             padding: 0.5rem;
             border: 1px solid #ddd;
             border-radius: 4px;
             margin-bottom: 0.5rem;
+            font-family: inherit;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 80px;
         }
         button {
             background-color: #007bff;
@@ -118,10 +125,21 @@
         <div class="mode-section">
             <h2>Blur All Faces</h2>
             <p>Blur all detected faces in the video</p>
+            <div class="form-group">
+                <label>Input Method:</label>
+                <select id="allInputMethod" onchange="toggleInputMethod('all')">
+                    <option value="file">Upload File</option>
+                    <option value="url">Video URL</option>
+                </select>
+            </div>
             <form id="blurAllForm">
-                <div class="form-group">
+                <div class="form-group" id="allFileGroup">
                     <label for="allVideo">Video File:</label>
-                    <input type="file" id="allVideo" accept="video/*" required>
+                    <input type="file" id="allVideo" accept="video/*">
+                </div>
+                <div class="form-group" id="allUrlGroup" style="display: none;">
+                    <label for="allVideoUrl">Video URL:</label>
+                    <input type="url" id="allVideoUrl" placeholder="https://example.com/video.mp4">
                 </div>
                 <div class="form-group">
                     <label for="allModel">Model:</label>
@@ -147,14 +165,29 @@
         <div class="mode-section">
             <h2>Blur Specific Faces</h2>
             <p>Blur only faces that match the reference images</p>
+            <div class="form-group">
+                <label>Input Method:</label>
+                <select id="oneInputMethod" onchange="toggleInputMethod('one')">
+                    <option value="file">Upload Files</option>
+                    <option value="url">URLs</option>
+                </select>
+            </div>
             <form id="blurOneForm">
-                <div class="form-group">
+                <div class="form-group" id="oneFileGroup">
                     <label for="oneVideo">Video File:</label>
-                    <input type="file" id="oneVideo" accept="video/*" required>
+                    <input type="file" id="oneVideo" accept="video/*">
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="oneUrlGroup" style="display: none;">
+                    <label for="oneVideoUrl">Video URL:</label>
+                    <input type="url" id="oneVideoUrl" placeholder="https://example.com/video.mp4">
+                </div>
+                <div class="form-group" id="oneReferencesFileGroup">
                     <label for="oneReferences">Reference Face Images:</label>
-                    <input type="file" id="oneReferences" accept="image/*" multiple required>
+                    <input type="file" id="oneReferences" accept="image/*" multiple>
+                </div>
+                <div class="form-group" id="oneReferencesUrlGroup" style="display: none;">
+                    <label for="oneReferenceUrls">Reference Face Image URLs (one per line):</label>
+                    <textarea id="oneReferenceUrls" rows="3" placeholder="https://example.com/face1.jpg&#10;https://example.com/face2.jpg"></textarea>
                 </div>
                 <div class="form-group">
                     <label for="oneModel">Model:</label>
@@ -180,14 +213,29 @@
         <div class="mode-section">
             <h2>Blur All Except Specific Faces</h2>
             <p>Blur all faces except those that match the reference images</p>
+            <div class="form-group">
+                <label>Input Method:</label>
+                <select id="exceptInputMethod" onchange="toggleInputMethod('except')">
+                    <option value="file">Upload Files</option>
+                    <option value="url">URLs</option>
+                </select>
+            </div>
             <form id="blurAllExceptForm">
-                <div class="form-group">
+                <div class="form-group" id="exceptFileGroup">
                     <label for="exceptVideo">Video File:</label>
-                    <input type="file" id="exceptVideo" accept="video/*" required>
+                    <input type="file" id="exceptVideo" accept="video/*">
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="exceptUrlGroup" style="display: none;">
+                    <label for="exceptVideoUrl">Video URL:</label>
+                    <input type="url" id="exceptVideoUrl" placeholder="https://example.com/video.mp4">
+                </div>
+                <div class="form-group" id="exceptReferencesFileGroup">
                     <label for="exceptReferences">Reference Face Images (to keep unblurred):</label>
-                    <input type="file" id="exceptReferences" accept="image/*" multiple required>
+                    <input type="file" id="exceptReferences" accept="image/*" multiple>
+                </div>
+                <div class="form-group" id="exceptReferencesUrlGroup" style="display: none;">
+                    <label for="exceptReferenceUrls">Reference Face Image URLs (one per line):</label>
+                    <textarea id="exceptReferenceUrls" rows="3" placeholder="https://example.com/face1.jpg&#10;https://example.com/face2.jpg"></textarea>
                 </div>
                 <div class="form-group">
                     <label for="exceptModel">Model:</label>
@@ -211,6 +259,37 @@
     </div>
     
     <script>
+        // Toggle between file upload and URL input
+        function toggleInputMethod(mode) {
+            const inputMethod = document.getElementById(`${mode}InputMethod`).value;
+            
+            // Toggle video input
+            const fileGroup = document.getElementById(`${mode}FileGroup`);
+            const urlGroup = document.getElementById(`${mode}UrlGroup`);
+            
+            if (inputMethod === 'file') {
+                fileGroup.style.display = 'block';
+                urlGroup.style.display = 'none';
+            } else {
+                fileGroup.style.display = 'none';
+                urlGroup.style.display = 'block';
+            }
+            
+            // Toggle reference images for modes that have them
+            if (mode !== 'all') {
+                const refFileGroup = document.getElementById(`${mode}ReferencesFileGroup`);
+                const refUrlGroup = document.getElementById(`${mode}ReferencesUrlGroup`);
+                
+                if (inputMethod === 'file') {
+                    refFileGroup.style.display = 'block';
+                    refUrlGroup.style.display = 'none';
+                } else {
+                    refFileGroup.style.display = 'none';
+                    refUrlGroup.style.display = 'block';
+                }
+            }
+        }
+
         // Handle form submissions
         async function handleFormSubmit(formId, endpoint, statusId) {
             const form = document.getElementById(formId);
@@ -223,26 +302,58 @@
                 const submitButton = form.querySelector('button[type="submit"]');
                 submitButton.disabled = true;
                 
+                // Determine input method and endpoint
+                let actualEndpoint = endpoint;
+                let isUrlMode = false;
+                
                 // Add form fields based on the form type
                 if (formId === 'blurAllForm') {
-                    formData.append('video', document.getElementById('allVideo').files[0]);
+                    const inputMethod = document.getElementById('allInputMethod').value;
+                    isUrlMode = inputMethod === 'url';
+                    
+                    if (isUrlMode) {
+                        actualEndpoint = '/blur/all-url';
+                        formData.append('video_url', document.getElementById('allVideoUrl').value);
+                    } else {
+                        formData.append('video', document.getElementById('allVideo').files[0]);
+                    }
                     formData.append('model', document.getElementById('allModel').value);
                     formData.append('censor_type', document.getElementById('allCensorType').value);
                     formData.append('count', '1');
                 } else if (formId === 'blurOneForm') {
-                    formData.append('video', document.getElementById('oneVideo').files[0]);
-                    const refFiles = document.getElementById('oneReferences').files;
-                    for (let i = 0; i < refFiles.length; i++) {
-                        formData.append('reference_faces', refFiles[i]);
+                    const inputMethod = document.getElementById('oneInputMethod').value;
+                    isUrlMode = inputMethod === 'url';
+                    
+                    if (isUrlMode) {
+                        actualEndpoint = '/blur/one-url';
+                        formData.append('video_url', document.getElementById('oneVideoUrl').value);
+                        const refUrls = document.getElementById('oneReferenceUrls').value.split('\n').filter(url => url.trim());
+                        refUrls.forEach(url => formData.append('reference_face_urls', url.trim()));
+                    } else {
+                        formData.append('video', document.getElementById('oneVideo').files[0]);
+                        const refFiles = document.getElementById('oneReferences').files;
+                        for (let i = 0; i < refFiles.length; i++) {
+                            formData.append('reference_faces', refFiles[i]);
+                        }
                     }
                     formData.append('model', document.getElementById('oneModel').value);
                     formData.append('censor_type', document.getElementById('oneCensorType').value);
                     formData.append('count', '1');
                 } else if (formId === 'blurAllExceptForm') {
-                    formData.append('video', document.getElementById('exceptVideo').files[0]);
-                    const refFiles = document.getElementById('exceptReferences').files;
-                    for (let i = 0; i < refFiles.length; i++) {
-                        formData.append('reference_faces', refFiles[i]);
+                    const inputMethod = document.getElementById('exceptInputMethod').value;
+                    isUrlMode = inputMethod === 'url';
+                    
+                    if (isUrlMode) {
+                        actualEndpoint = '/blur/allexcept-url';
+                        formData.append('video_url', document.getElementById('exceptVideoUrl').value);
+                        const refUrls = document.getElementById('exceptReferenceUrls').value.split('\n').filter(url => url.trim());
+                        refUrls.forEach(url => formData.append('reference_face_urls', url.trim()));
+                    } else {
+                        formData.append('video', document.getElementById('exceptVideo').files[0]);
+                        const refFiles = document.getElementById('exceptReferences').files;
+                        for (let i = 0; i < refFiles.length; i++) {
+                            formData.append('reference_faces', refFiles[i]);
+                        }
                     }
                     formData.append('model', document.getElementById('exceptModel').value);
                     formData.append('censor_type', document.getElementById('exceptCensorType').value);
@@ -251,11 +362,11 @@
                 
                 try {
                     // Submit the form
-                    statusDiv.innerHTML = 'Uploading video...';
+                    statusDiv.innerHTML = isUrlMode ? 'Downloading video from URL...' : 'Uploading video...';
                     statusDiv.className = 'status processing';
                     statusDiv.style.display = 'block';
                     
-                    const response = await fetch(endpoint, {
+                    const response = await fetch(actualEndpoint, {
                         method: 'POST',
                         body: formData
                     });
