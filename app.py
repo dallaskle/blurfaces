@@ -1,6 +1,7 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import os
 import uuid
@@ -8,6 +9,8 @@ import tempfile
 import shutil
 from pathlib import Path
 import asyncio
+import aiohttp
+import aiofiles
 from datetime import datetime
 
 # Import the blur faces functionality
@@ -19,6 +22,18 @@ import numpy as np
 from tqdm import trange
 
 app = FastAPI(title="BlurFaces API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Set maximum file size (500MB)
+MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB in bytes
 
 # Create directories for uploads and processed videos
 UPLOAD_DIR = Path("uploads")
@@ -33,6 +48,48 @@ app.mount("/processed", StaticFiles(directory="processed"), name="processed")
 
 # Store job status
 job_status = {}
+
+async def download_video_from_url(url: str, output_path: str) -> None:
+    """Download video from URL to local file"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise HTTPException(400, f"Failed to download video: HTTP {response.status}")
+                
+                # Check content length if available
+                content_length = response.headers.get('content-length')
+                if content_length:
+                    if int(content_length) > MAX_FILE_SIZE:
+                        raise HTTPException(413, f"Video file too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB")
+                
+                # Download and save file
+                async with aiofiles.open(output_path, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        await f.write(chunk)
+                        
+    except aiohttp.ClientError as e:
+        raise HTTPException(400, f"Failed to download video: {str(e)}")
+    except Exception as e:
+        raise HTTPException(500, f"Error downloading video: {str(e)}")
+
+async def download_image_from_url(url: str, output_path: str) -> None:
+    """Download reference image from URL to local file"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise HTTPException(400, f"Failed to download image: HTTP {response.status}")
+                
+                # Download and save file
+                async with aiofiles.open(output_path, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        await f.write(chunk)
+                        
+    except aiohttp.ClientError as e:
+        raise HTTPException(400, f"Failed to download image: {str(e)}")
+    except Exception as e:
+        raise HTTPException(500, f"Error downloading image: {str(e)}")
 
 @app.get("/")
 async def root():
@@ -207,13 +264,17 @@ async def blur_all_faces(
     if censor_type not in ["gaussianblur", "facemasking", "pixelation"]:
         raise HTTPException(400, "Invalid censor type")
     
+    # Check file size
+    content = await video.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(413, f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB")
+    
     # Generate job ID
     job_id = str(uuid.uuid4())
     
     # Save uploaded video
     video_path = UPLOAD_DIR / f"{job_id}_{video.filename}"
     with open(video_path, "wb") as f:
-        content = await video.read()
         f.write(content)
     
     # Start background processing
@@ -253,14 +314,18 @@ async def blur_specific_faces(
     if censor_type not in ["gaussianblur", "facemasking", "pixelation"]:
         raise HTTPException(400, "Invalid censor type")
     
+    # Check video file size
+    video_content = await video.read()
+    if len(video_content) > MAX_FILE_SIZE:
+        raise HTTPException(413, f"Video file too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB")
+    
     # Generate job ID
     job_id = str(uuid.uuid4())
     
     # Save uploaded video
     video_path = UPLOAD_DIR / f"{job_id}_{video.filename}"
     with open(video_path, "wb") as f:
-        content = await video.read()
-        f.write(content)
+        f.write(video_content)
     
     # Save reference faces
     ref_paths = []
@@ -309,14 +374,18 @@ async def blur_all_except_specific_faces(
     if censor_type not in ["gaussianblur", "facemasking", "pixelation"]:
         raise HTTPException(400, "Invalid censor type")
     
+    # Check video file size
+    video_content = await video.read()
+    if len(video_content) > MAX_FILE_SIZE:
+        raise HTTPException(413, f"Video file too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB")
+    
     # Generate job ID
     job_id = str(uuid.uuid4())
     
     # Save uploaded video
     video_path = UPLOAD_DIR / f"{job_id}_{video.filename}"
     with open(video_path, "wb") as f:
-        content = await video.read()
-        f.write(content)
+        f.write(video_content)
     
     # Save reference faces
     ref_paths = []
@@ -326,6 +395,186 @@ async def blur_all_except_specific_faces(
             content = await ref_face.read()
             f.write(content)
         ref_paths.append(str(ref_path))
+    
+    # Start background processing
+    background_tasks.add_task(
+        process_video,
+        job_id=job_id,
+        video_path=str(video_path),
+        mode="allexcept",
+        model=model,
+        censor_type=censor_type,
+        count=count,
+        reference_faces=ref_paths
+    )
+    
+    return {
+        "job_id": job_id,
+        "status": "accepted",
+        "check_status_url": f"/status/{job_id}"
+    }
+
+# URL-based endpoints for processing videos from URLs
+@app.post("/blur/all-url")
+async def blur_all_faces_from_url(
+    background_tasks: BackgroundTasks,
+    video_url: str = Form(...),
+    model: str = Form("hog"),
+    censor_type: str = Form("gaussianblur"),
+    count: int = Form(1)
+):
+    """Blur all faces in a video downloaded from URL"""
+    
+    # Validate inputs
+    if model not in ["hog", "cnn"]:
+        raise HTTPException(400, "Model must be 'hog' or 'cnn'")
+    if censor_type not in ["gaussianblur", "facemasking", "pixelation"]:
+        raise HTTPException(400, "Invalid censor type")
+    
+    # Generate job ID
+    job_id = str(uuid.uuid4())
+    
+    # Download video from URL
+    video_filename = f"{job_id}_video.mp4"
+    video_path = UPLOAD_DIR / video_filename
+    
+    try:
+        await download_video_from_url(video_url, str(video_path))
+    except Exception as e:
+        raise e
+    
+    # Start background processing
+    background_tasks.add_task(
+        process_video,
+        job_id=job_id,
+        video_path=str(video_path),
+        mode="all",
+        model=model,
+        censor_type=censor_type,
+        count=count
+    )
+    
+    return {
+        "job_id": job_id,
+        "status": "accepted",
+        "check_status_url": f"/status/{job_id}"
+    }
+
+@app.post("/blur/one-url")
+async def blur_specific_faces_from_url(
+    background_tasks: BackgroundTasks,
+    video_url: str = Form(...),
+    reference_face_urls: List[str] = Form(...),
+    model: str = Form("hog"),
+    censor_type: str = Form("gaussianblur"),
+    count: int = Form(1)
+):
+    """Blur specific faces in a video downloaded from URL using reference images from URLs"""
+    
+    if not reference_face_urls:
+        raise HTTPException(400, "At least one reference face URL is required")
+    
+    # Validate inputs
+    if model not in ["hog", "cnn"]:
+        raise HTTPException(400, "Model must be 'hog' or 'cnn'")
+    if censor_type not in ["gaussianblur", "facemasking", "pixelation"]:
+        raise HTTPException(400, "Invalid censor type")
+    
+    # Generate job ID
+    job_id = str(uuid.uuid4())
+    
+    # Download video from URL
+    video_filename = f"{job_id}_video.mp4"
+    video_path = UPLOAD_DIR / video_filename
+    
+    try:
+        await download_video_from_url(video_url, str(video_path))
+    except Exception as e:
+        raise e
+    
+    # Download reference face images
+    ref_paths = []
+    for i, ref_url in enumerate(reference_face_urls):
+        ref_filename = f"{job_id}_ref_{i}.jpg"
+        ref_path = UPLOAD_DIR / ref_filename
+        try:
+            await download_image_from_url(ref_url, str(ref_path))
+            ref_paths.append(str(ref_path))
+        except Exception as e:
+            # Clean up any downloaded files
+            if os.path.exists(video_path):
+                os.remove(video_path)
+            for cleanup_path in ref_paths:
+                if os.path.exists(cleanup_path):
+                    os.remove(cleanup_path)
+            raise e
+    
+    # Start background processing
+    background_tasks.add_task(
+        process_video,
+        job_id=job_id,
+        video_path=str(video_path),
+        mode="one",
+        model=model,
+        censor_type=censor_type,
+        count=count,
+        reference_faces=ref_paths
+    )
+    
+    return {
+        "job_id": job_id,
+        "status": "accepted",
+        "check_status_url": f"/status/{job_id}"
+    }
+
+@app.post("/blur/allexcept-url")
+async def blur_all_except_specific_faces_from_url(
+    background_tasks: BackgroundTasks,
+    video_url: str = Form(...),
+    reference_face_urls: List[str] = Form(...),
+    model: str = Form("hog"),
+    censor_type: str = Form("gaussianblur"),
+    count: int = Form(1)
+):
+    """Blur all faces except specific ones in a video downloaded from URL using reference images from URLs"""
+    
+    if not reference_face_urls:
+        raise HTTPException(400, "At least one reference face URL is required")
+    
+    # Validate inputs
+    if model not in ["hog", "cnn"]:
+        raise HTTPException(400, "Model must be 'hog' or 'cnn'")
+    if censor_type not in ["gaussianblur", "facemasking", "pixelation"]:
+        raise HTTPException(400, "Invalid censor type")
+    
+    # Generate job ID
+    job_id = str(uuid.uuid4())
+    
+    # Download video from URL
+    video_filename = f"{job_id}_video.mp4"
+    video_path = UPLOAD_DIR / video_filename
+    
+    try:
+        await download_video_from_url(video_url, str(video_path))
+    except Exception as e:
+        raise e
+    
+    # Download reference face images
+    ref_paths = []
+    for i, ref_url in enumerate(reference_face_urls):
+        ref_filename = f"{job_id}_ref_{i}.jpg"
+        ref_path = UPLOAD_DIR / ref_filename
+        try:
+            await download_image_from_url(ref_url, str(ref_path))
+            ref_paths.append(str(ref_path))
+        except Exception as e:
+            # Clean up any downloaded files
+            if os.path.exists(video_path):
+                os.remove(video_path)
+            for cleanup_path in ref_paths:
+                if os.path.exists(cleanup_path):
+                    os.remove(cleanup_path)
+            raise e
     
     # Start background processing
     background_tasks.add_task(

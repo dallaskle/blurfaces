@@ -13,11 +13,18 @@ def decode_fourcc(cc):
 
 
 def has_audio(file_path):
-    streams = ffmpeg.probe(file_path)['streams']
-    for stream in streams:
-        if stream['codec_type'] == 'audio':
-            return True
-    return False
+    try:
+        streams = ffmpeg.probe(file_path)['streams']
+        for stream in streams:
+            if stream['codec_type'] == 'audio':
+                return True
+        return False
+    except FileNotFoundError:
+        print("Warning: ffprobe not found, assuming no audio")
+        return False
+    except Exception as e:
+        print(f"Warning: Could not probe audio: {e}")
+        return False
 
 
 def get_video_properties(video_capture):
