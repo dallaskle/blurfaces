@@ -21,6 +21,15 @@ import ffmpeg
 import numpy as np
 from tqdm import trange
 
+# Import optimized processor if available
+try:
+    from blur_faces_optimized import OptimizedVideoProcessor, process_video_optimized
+    OPTIMIZED_AVAILABLE = True
+    print("[INFO] Optimized video processor loaded successfully!")
+except ImportError:
+    OPTIMIZED_AVAILABLE = False
+    print("[WARNING] Optimized processor not available, using standard processing")
+
 app = FastAPI(title="BlurFaces API", version="1.0.0")
 
 # Add CORS middleware
@@ -169,12 +178,47 @@ async def process_video(
     try:
         job_status[job_id] = {"status": "processing", "progress": 0}
         
+        # Output path
+        output_path = PROCESSED_DIR / f"{job_id}.mp4"
+        
+        # Define progress callback
+        def update_progress(progress):
+            job_status[job_id]["progress"] = progress
+        
+        # Use optimized processor if available and model is HOG
+        if OPTIMIZED_AVAILABLE and model == "hog":
+            print(f"[INFO] Using OPTIMIZED processor for job {job_id}")
+            try:
+                processor = OptimizedVideoProcessor(model, censor_type, count)
+                processor.process_video_optimized(
+                    video_path, 
+                    str(output_path), 
+                    mode, 
+                    reference_faces,
+                    progress_callback=update_progress
+                )
+                
+                # Update job status
+                job_status[job_id] = {
+                    "status": "completed",
+                    "progress": 100,
+                    "output_file": str(output_path),
+                    "download_url": f"/download/{job_id}",
+                    "processing_method": "optimized"
+                }
+                return
+                
+            except Exception as e:
+                print(f"[WARNING] Optimized processing failed, falling back to standard: {e}")
+                # Fall through to standard processing
+        
+        # Standard processing (fallback or when optimized not available)
+        print(f"[INFO] Using STANDARD processor for job {job_id}")
+        
         # Open video
         video_capture = cv2.VideoCapture(video_path)
         width, height, length, fps, fourcc, codec = get_video_properties(video_capture)
         
-        # Output path
-        output_path = PROCESSED_DIR / f"{job_id}.mp4"
         temp_video_path = PROCESSED_DIR / f"{job_id}_temp.mp4"
         
         # Create video writer with fallback codec support
@@ -214,15 +258,16 @@ async def process_video(
                 except Exception as e:
                     print(f"Error loading reference face {ref_face_path}: {e}")
         
-        # Process frames
+        # Process frames with more frequent progress updates
         for i in range(length + 1):
             ret, frame = video_capture.read()
             if not ret:
                 break
             
-            # Update progress
-            progress = int((i / length) * 100)
-            job_status[job_id]["progress"] = progress
+            # Update progress more frequently
+            if i % 5 == 0:  # Update every 5 frames
+                progress = int((i / length) * 100)
+                job_status[job_id]["progress"] = progress
             
             # Detect faces
             face_locations = face_recognition.face_locations(
@@ -262,7 +307,8 @@ async def process_video(
             in_av = ffmpeg.input(video_path)
             blurred_video = ffmpeg.input(str(temp_video_path))
             stream = ffmpeg.output(
-                blurred_video, in_av.audio, str(output_path)
+                blurred_video, in_av.audio, str(output_path),
+                vcodec='libx264', crf=23, preset='fast'
             ).overwrite_output()
             ffmpeg.run(stream, quiet=True)
             os.remove(temp_video_path)
@@ -274,7 +320,8 @@ async def process_video(
             "status": "completed",
             "progress": 100,
             "output_file": str(output_path),
-            "download_url": f"/download/{job_id}"
+            "download_url": f"/download/{job_id}",
+            "processing_method": "standard"
         }
         
     except Exception as e:

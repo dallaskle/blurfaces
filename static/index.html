@@ -115,11 +115,32 @@
         .download-link:hover {
             text-decoration: underline;
         }
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 0.5rem;
+        }
+        .check-progress-btn {
+            background-color: #28a745;
+            padding: 0.5rem 1rem;
+            font-size: 0.9rem;
+            width: auto;
+            margin: 0;
+        }
+        .check-progress-btn:hover {
+            background-color: #218838;
+        }
+        .processing-method {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🎭 BlurFaces API  v0.616109</h1>
+        <h1>🎭 BlurFaces API  v0.616109 - Optimized Edition</h1>
         
         <!-- Blur All Faces -->
         <div class="mode-section">
@@ -385,29 +406,14 @@
                         <div class="progress-bar">
                             <div class="progress-fill" style="width: 0%"></div>
                         </div>
+                        <div class="progress-info">
+                            <span class="progress-text">0%</span>
+                            <button type="button" class="check-progress-btn" onclick="checkProgress('${jobId}', '${statusId}')">Check Progress</button>
+                        </div>
                     `;
                     
                     const intervalId = setInterval(async () => {
-                        const statusResponse = await fetch(`/status/${jobId}`);
-                        const statusData = await statusResponse.json();
-                        
-                        if (statusData.status === 'processing') {
-                            const progressFill = statusDiv.querySelector('.progress-fill');
-                            progressFill.style.width = `${statusData.progress}%`;
-                        } else if (statusData.status === 'completed') {
-                            clearInterval(intervalId);
-                            statusDiv.className = 'status completed';
-                            statusDiv.innerHTML = `
-                                <div>✅ Processing completed!</div>
-                                <a href="${statusData.download_url}" class="download-link" download>📥 Download Processed Video</a>
-                            `;
-                            submitButton.disabled = false;
-                        } else if (statusData.status === 'failed') {
-                            clearInterval(intervalId);
-                            statusDiv.className = 'status failed';
-                            statusDiv.innerHTML = `❌ Processing failed: ${statusData.error}`;
-                            submitButton.disabled = false;
-                        }
+                        await updateJobStatus(jobId, statusDiv, intervalId, submitButton);
                     }, 1000);
                     
                 } catch (error) {
@@ -422,6 +428,65 @@
         handleFormSubmit('blurAllForm', '/blur/all', 'allStatus');
         handleFormSubmit('blurOneForm', '/blur/one', 'oneStatus');
         handleFormSubmit('blurAllExceptForm', '/blur/allexcept', 'exceptStatus');
+        
+        // Function to manually check progress
+        async function checkProgress(jobId, statusDivId) {
+            const statusDiv = document.getElementById(statusDivId);
+            try {
+                const response = await fetch(`/status/${jobId}`);
+                const data = await response.json();
+                
+                if (data.status === 'processing') {
+                    const progressFill = statusDiv.querySelector('.progress-fill');
+                    const progressText = statusDiv.querySelector('.progress-text');
+                    progressFill.style.width = `${data.progress}%`;
+                    progressText.textContent = `${data.progress}%`;
+                } else if (data.status === 'completed') {
+                    statusDiv.className = 'status completed';
+                    statusDiv.innerHTML = `
+                        <div>✅ Processing completed!</div>
+                        ${data.processing_method ? `<div class="processing-method">Method: ${data.processing_method}</div>` : ''}
+                        <a href="${data.download_url}" class="download-link" download>📥 Download Processed Video</a>
+                    `;
+                } else if (data.status === 'failed') {
+                    statusDiv.className = 'status failed';
+                    statusDiv.innerHTML = `❌ Processing failed: ${data.error}`;
+                }
+            } catch (error) {
+                console.error('Error checking progress:', error);
+            }
+        }
+        
+        // Shared function to update job status
+        async function updateJobStatus(jobId, statusDiv, intervalId, submitButton) {
+            try {
+                const statusResponse = await fetch(`/status/${jobId}`);
+                const statusData = await statusResponse.json();
+                
+                if (statusData.status === 'processing') {
+                    const progressFill = statusDiv.querySelector('.progress-fill');
+                    const progressText = statusDiv.querySelector('.progress-text');
+                    progressFill.style.width = `${statusData.progress}%`;
+                    progressText.textContent = `${statusData.progress}%`;
+                } else if (statusData.status === 'completed') {
+                    clearInterval(intervalId);
+                    statusDiv.className = 'status completed';
+                    statusDiv.innerHTML = `
+                        <div>✅ Processing completed!</div>
+                        ${statusData.processing_method ? `<div class="processing-method">Method: ${statusData.processing_method}</div>` : ''}
+                        <a href="${statusData.download_url}" class="download-link" download>📥 Download Processed Video</a>
+                    `;
+                    submitButton.disabled = false;
+                } else if (statusData.status === 'failed') {
+                    clearInterval(intervalId);
+                    statusDiv.className = 'status failed';
+                    statusDiv.innerHTML = `❌ Processing failed: ${statusData.error}`;
+                    submitButton.disabled = false;
+                }
+            } catch (error) {
+                console.error('Error updating status:', error);
+            }
+        }
     </script>
 </body>
 </html> 
